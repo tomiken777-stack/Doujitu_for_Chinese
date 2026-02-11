@@ -1,0 +1,695 @@
+import SwiftUI
+import AVFoundation
+import Speech
+import Accelerate
+import Combine
+import StoreKit
+#if canImport(Translation)
+import Translation
+#endif
+
+// =====================================
+// 19言語対応 設定モデル (中国語版)
+// =====================================
+struct LanguageConfig: Identifiable, Hashable {
+    let id: String
+    let userLangCode: String    // ユーザーの言語（ここでは中国語 zh-Hans）
+    let partnerLangCode: String // 相手の言語
+    let userASRLocale: String   // ユーザーの音声認識（中国語 zh-CN）
+    let partnerASRLocale: String
+    let partnerTTSLocale: String
+    let flag: String
+}
+
+// ユーザーは中国人（zh-Hans/zh-CN）とし、相手の言語リストを定義します。
+// 元のリストから「中国語（簡体字）」を外し、「日本語」を追加しています。
+let availableLanguages: [LanguageConfig] = [
+    LanguageConfig(id: "英语", userLangCode: "zh-Hans", partnerLangCode: "en", userASRLocale: "zh-CN", partnerASRLocale: "en-US", partnerTTSLocale: "en-US", flag: "🇺🇸"),
+    LanguageConfig(id: "日语", userLangCode: "zh-Hans", partnerLangCode: "ja", userASRLocale: "zh-CN", partnerASRLocale: "ja-JP", partnerTTSLocale: "ja-JP", flag: "🇯🇵"),
+    LanguageConfig(id: "印地语", userLangCode: "zh-Hans", partnerLangCode: "hi", userASRLocale: "zh-CN", partnerASRLocale: "hi-IN", partnerTTSLocale: "hi-IN", flag: "🇮🇳"),
+    // 中国語(簡体字)は自分自身なのでリストから除外
+    LanguageConfig(id: "中文(繁体)", userLangCode: "zh-Hans", partnerLangCode: "zh-Hant", userASRLocale: "zh-CN", partnerASRLocale: "zh-TW", partnerTTSLocale: "zh-TW", flag: "🇹🇼"),
+    LanguageConfig(id: "韩语", userLangCode: "zh-Hans", partnerLangCode: "ko", userASRLocale: "zh-CN", partnerASRLocale: "ko-KR", partnerTTSLocale: "ko-KR", flag: "🇰🇷"),
+    LanguageConfig(id: "法语", userLangCode: "zh-Hans", partnerLangCode: "fr", userASRLocale: "zh-CN", partnerASRLocale: "fr-FR", partnerTTSLocale: "fr-FR", flag: "🇫🇷"),
+    LanguageConfig(id: "西班牙语", userLangCode: "zh-Hans", partnerLangCode: "es", userASRLocale: "zh-CN", partnerASRLocale: "es-ES", partnerTTSLocale: "es-ES", flag: "🇪🇸"),
+    LanguageConfig(id: "德语", userLangCode: "zh-Hans", partnerLangCode: "de", userASRLocale: "zh-CN", partnerASRLocale: "de-DE", partnerTTSLocale: "de-DE", flag: "🇩🇪"),
+    LanguageConfig(id: "意大利语", userLangCode: "zh-Hans", partnerLangCode: "it", userASRLocale: "zh-CN", partnerASRLocale: "it-IT", partnerTTSLocale: "it-IT", flag: "🇮🇹"),
+    LanguageConfig(id: "葡萄牙语", userLangCode: "zh-Hans", partnerLangCode: "pt", userASRLocale: "zh-CN", partnerASRLocale: "pt-BR", partnerTTSLocale: "pt-BR", flag: "🇧🇷"),
+    LanguageConfig(id: "俄语", userLangCode: "zh-Hans", partnerLangCode: "ru", userASRLocale: "zh-CN", partnerASRLocale: "ru-RU", partnerTTSLocale: "ru-RU", flag: "🇷🇺"),
+    LanguageConfig(id: "越南语", userLangCode: "zh-Hans", partnerLangCode: "vi", userASRLocale: "zh-CN", partnerASRLocale: "vi-VN", partnerTTSLocale: "vi-VN", flag: "🇻🇳"),
+    LanguageConfig(id: "泰语", userLangCode: "zh-Hans", partnerLangCode: "th", userASRLocale: "zh-CN", partnerASRLocale: "th-TH", partnerTTSLocale: "th-TH", flag: "🇹🇭"),
+    LanguageConfig(id: "印尼语", userLangCode: "zh-Hans", partnerLangCode: "id", userASRLocale: "zh-CN", partnerASRLocale: "id-ID", partnerTTSLocale: "id-ID", flag: "🇮🇩"),
+    LanguageConfig(id: "阿拉伯语", userLangCode: "zh-Hans", partnerLangCode: "ar", userASRLocale: "zh-CN", partnerASRLocale: "ar-SA", partnerTTSLocale: "ar-SA", flag: "🇸🇦"),
+    LanguageConfig(id: "土耳其语", userLangCode: "zh-Hans", partnerLangCode: "tr", userASRLocale: "zh-CN", partnerASRLocale: "tr-TR", partnerTTSLocale: "tr-TR", flag: "🇹🇷"),
+    LanguageConfig(id: "荷兰语", userLangCode: "zh-Hans", partnerLangCode: "nl", userASRLocale: "zh-CN", partnerASRLocale: "nl-NL", partnerTTSLocale: "nl-NL", flag: "🇳🇱"),
+    LanguageConfig(id: "波兰语", userLangCode: "zh-Hans", partnerLangCode: "pl", userASRLocale: "zh-CN", partnerASRLocale: "pl-PL", partnerTTSLocale: "pl-PL", flag: "🇵🇱"),
+    LanguageConfig(id: "乌克兰语", userLangCode: "zh-Hans", partnerLangCode: "uk", userASRLocale: "zh-CN", partnerASRLocale: "uk-UA", partnerTTSLocale: "uk-UA", flag: "🇺🇦")
+]
+
+struct DoujituConfig {
+    let appDisplayName: String = "DoujituforChinese"
+    // プロダクトキーを変更
+    let subscriptionProductID: String = "Doujitu_for_Chinese"
+}
+
+let appConfig = DoujituConfig()
+
+struct ConversationLog: Identifiable {
+    let id = UUID()
+    let original: String
+    let translated: String
+    let isUser: Bool
+    let timestamp = Date()
+}
+
+@MainActor final class TrialUsageStore: ObservableObject {
+    private let limit: Int
+    private let usedKey: String
+    @Published private(set) var used: Int
+    @Published private(set) var remaining: Int
+    @Published var isUnlocked: Bool = false
+    // キーを変更して日本語版との競合を回避
+    init(limit: Int = 30, usedKey: String = "DoujituforChinese_trial_used_v1") {
+        let saved = UserDefaults.standard.integer(forKey: usedKey)
+        let initialUsed = max(0, saved)
+        self.limit = limit
+        self.usedKey = usedKey
+        self.used = initialUsed
+        self.remaining = max(0, limit - initialUsed)
+    }
+    var canUseTranslation: Bool { isUnlocked || remaining > 0 }
+    func consumeOneIfNeeded() {
+        if isUnlocked { return }
+        guard remaining > 0 else { return }
+        used += 1
+        UserDefaults.standard.set(used, forKey: usedKey)
+        remaining = max(0, limit - used)
+    }
+}
+
+@MainActor final class SubscriptionStore: ObservableObject {
+    @Published var product: Product?
+    @Published var isSubscribed: Bool = false
+    @Published var hasCheckedSubscriptionStatus: Bool = false
+    private let productID: String
+    init(config: DoujituConfig) {
+        self.productID = config.subscriptionProductID
+        Task {
+            await refresh()
+            await observeTransactions()
+        }
+    }
+    func refresh() async {
+        do {
+            let products = try await Product.products(for: [productID])
+            product = products.first
+            await updateSubscriptionStatus()
+        } catch {
+            await updateSubscriptionStatus()
+        }
+    }
+    func purchase() async {
+        guard let product else { return }
+        do {
+            let result = try await product.purchase()
+            if case .success(let verification) = result {
+                if case .verified(let transaction) = verification {
+                    await updateSubscriptionStatus()
+                    await transaction.finish()
+                }
+            }
+        } catch { }
+    }
+    func restore() async {
+        try? await AppStore.sync()
+        await updateSubscriptionStatus()
+    }
+    func observeTransactions() async {
+        for await result in Transaction.updates {
+            if case .verified(let transaction) = result {
+                await updateSubscriptionStatus()
+                await transaction.finish()
+            }
+        }
+    }
+    func updateSubscriptionStatus() async {
+        var active = false
+        for await result in Transaction.currentEntitlements {
+            if case .verified(let transaction) = result, transaction.productID == productID {
+                active = true
+            }
+        }
+        isSubscribed = active
+        hasCheckedSubscriptionStatus = true
+    }
+}
+
+final class ASRService: NSObject {
+    private var recognizer: SFSpeechRecognizer?
+    private let audioEngine = AVAudioEngine()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private var task: SFSpeechRecognitionTask?
+    private var onPartialHandler: ((String)->Void)?
+    private var onFinalHandler: ((String)->Void)?
+    private var isStarting = false
+    private var paused = false
+    private var inputTapInstalled = false
+    init(localeIdentifier: String) {
+        self.recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier))
+        super.init()
+    }
+    func updateLocale(_ localeIdentifier: String) {
+        self.recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier))
+    }
+    @MainActor func requestAuthorization() async throws {
+        let status = await withCheckedContinuation { (cont: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
+            SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
+        }
+        if status != .authorized { throw NSError(domain: "ASR", code: 1) }
+    }
+    @MainActor func startContinuous(onPartial: @escaping (String)->Void, onFinal: @escaping (String)->Void) throws {
+        if isStarting { return }
+        isStarting = true
+        defer { isStarting = false }
+        paused = false
+        cancelAll()
+        onPartialHandler = onPartial
+        onFinalHandler = onFinal
+        try configureAndStartEngine()
+        startRecognitionTask()
+    }
+    @MainActor func finishInput() {
+        if inputTapInstalled {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            inputTapInstalled = false
+        }
+        audioEngine.stop()
+        request?.endAudio()
+    }
+    @MainActor func cancelAll() {
+        finishInput()
+        audioEngine.reset()
+        task?.cancel()
+        task = nil
+        request = nil
+    }
+    @MainActor private func configureAndStartEngine() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.shouldReportPartialResults = true
+        if recognizer?.supportsOnDeviceRecognition == true { req.requiresOnDeviceRecognition = true }
+        self.request = req
+        let input = audioEngine.inputNode
+        let fmt = input.outputFormat(forBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: fmt) { buffer, _ in req.append(buffer) }
+        inputTapInstalled = true
+        audioEngine.prepare()
+        try audioEngine.start()
+    }
+    @MainActor private func startRecognitionTask() {
+        guard let req = self.request else { return }
+        task = recognizer?.recognitionTask(with: req) { [weak self] result, error in
+            Task { @MainActor in
+                if let r = result {
+                    let text = r.bestTranscription.formattedString
+                    if r.isFinal { self?.onFinalHandler?(text) } else { self?.onPartialHandler?(text) }
+                }
+                if let nsErr = error as NSError?, nsErr.code == 1101, !(self?.paused ?? true) {
+                    self?.softRestart()
+                }
+            }
+        }
+    }
+    @MainActor private func softRestart() {
+        cancelAll()
+        Task {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if let ph = onPartialHandler, let fh = onFinalHandler {
+                try? startContinuous(onPartial: ph, onFinal: fh)
+            }
+        }
+    }
+}
+
+@MainActor final class TTSSpeaker: NSObject, AVSpeechSynthesizerDelegate {
+    private let synth = AVSpeechSynthesizer()
+    @Published var isSpeaking = false
+    var onFinish: (() -> Void)?
+    override init() {
+        super.init()
+        synth.delegate = self
+    }
+    func stopImmediately() {
+        synth.stopSpeaking(at: .immediate)
+        isSpeaking = false
+    }
+    func speak(_ text: String, locale: String) {
+        stopImmediately()
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .default, options: [.duckOthers])
+        try? session.overrideOutputAudioPort(.speaker)
+        try? session.setActive(true)
+        let u = AVSpeechUtterance(string: text)
+        u.voice = AVSpeechSynthesisVoice(language: locale)
+        u.rate = AVSpeechUtteranceDefaultSpeechRate
+        u.volume = 1.0
+        isSpeaking = true
+        synth.speak(u)
+    }
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            self.isSpeaking = false
+            self.onFinish?()
+        }
+    }
+}
+
+@MainActor final class DoujituVM: ObservableObject {
+    @Published var selectedLanguage: LanguageConfig = availableLanguages[0] {
+        didSet { updateConfigForSelectedLanguage() }
+    }
+    @Published var enLivePartial: String = ""
+    @Published var jaFromEN: String = "" // 変数名は維持（実態は中国語）
+    @Published var partialJA: String = "" // 変数名は維持（実態は中国語）
+    @Published var enFromJA: String = "" // 変数名は維持（実態は相手言語）
+    @Published var isRecordingJA = false
+    @Published var isTranslating = false
+    @Published var logs: [ConversationLog] = []
+    var shareText: String {
+        logs.map { log in
+            // UIテキスト: 簡体字
+            let prefix = log.isUser ? "【我】" : "【对方】"
+            return "\(prefix)\n原文: \(log.original)\n译文: \(log.translated)"
+        }.joined(separator: "\n\n")
+    }
+    var asrPartner: ASRService
+    var asrJA: ASRService // 変数名は維持（実態は中国語認識用）
+    let tts = TTSSpeaker()
+    private let trialStore: TrialUsageStore
+    #if canImport(Translation)
+    @Published var tConfigJAtoEN: TranslationSession.Configuration?
+    @Published var tConfigENtoJA: TranslationSession.Configuration?
+    private var sessionJAtoEN: TranslationSession?
+    private var sessionENtoJA: TranslationSession?
+    #endif
+    init(trialStore: TrialUsageStore) {
+        self.trialStore = trialStore
+        self.asrPartner = ASRService(localeIdentifier: availableLanguages[0].partnerASRLocale)
+        // ここを中国語(zh-CN)に変更
+        self.asrJA = ASRService(localeIdentifier: "zh-CN")
+        tts.onFinish = { [weak self] in
+            Task { await self?.startENContinuous() }
+        }
+        updateConfigForSelectedLanguage()
+    }
+    private func updateConfigForSelectedLanguage() {
+        asrPartner.cancelAll()
+        asrPartner.updateLocale(selectedLanguage.partnerASRLocale)
+        jaFromEN = ""
+        enFromJA = ""
+        enLivePartial = ""
+        #if canImport(Translation)
+        // ソースを日本語(ja)から中国語(zh-Hans)へ変更
+        tConfigJAtoEN = .init(source: .init(identifier: "zh-Hans"), target: .init(identifier: selectedLanguage.partnerLangCode))
+        // ターゲットを日本語(ja)から中国語(zh-Hans)へ変更
+        tConfigENtoJA = .init(source: .init(identifier: selectedLanguage.partnerLangCode), target: .init(identifier: "zh-Hans"))
+        #endif
+        Task { await startENContinuous() }
+    }
+    func addToLog(original: String, translated: String, isUser: Bool) {
+        let newLog = ConversationLog(original: original, translated: translated, isUser: isUser)
+        self.logs.append(newLog)
+    }
+    func clearLogs() { self.logs.removeAll() }
+    func startENContinuous() async {
+        guard trialStore.canUseTranslation else { return }
+        do {
+            try await asrPartner.requestAuthorization()
+            try asrPartner.startContinuous(onPartial: { [weak self] text in
+                self?.enLivePartial = text
+                self?.translateENtoJA(text, isFinal: false)
+            }, onFinal: { [weak self] text in
+                self?.translateENtoJA(text, isFinal: true)
+            })
+        } catch { }
+    }
+    private func translateENtoJA(_ text: String, isFinal: Bool) {
+        guard !text.isEmpty else { return }
+        #if canImport(Translation)
+        Task {
+            guard let s = sessionENtoJA else { return }
+            do {
+                let res = try await s.translate(text)
+                self.jaFromEN = res.targetText
+                if let lastIndex = self.logs.indices.last, !self.logs[lastIndex].isUser {
+                    self.logs[lastIndex] = ConversationLog(original: text, translated: res.targetText, isUser: false)
+                } else {
+                    self.addToLog(original: text, translated: res.targetText, isUser: false)
+                }
+                if isFinal { trialStore.consumeOneIfNeeded() }
+            } catch { }
+        }
+        #endif
+    }
+    func startRecordingJA() async {
+        guard !isRecordingJA else { return }
+        isRecordingJA = true
+        partialJA = ""
+        enFromJA = ""
+        asrPartner.cancelAll()
+        tts.stopImmediately()
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1秒
+        do {
+            try await asrJA.requestAuthorization()
+            try asrJA.startContinuous(onPartial: { self.partialJA = $0 }, onFinal: { self.partialJA = $0 })
+        } catch { isRecordingJA = false }
+    }
+    func finishAndTranslateJA() {
+        guard isRecordingJA else { return }
+        asrJA.finishInput()
+        isRecordingJA = false
+        Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            await runJAtoEN(partialJA)
+        }
+    }
+    private func runJAtoEN(_ text: String) async {
+        guard trialStore.canUseTranslation else { return }
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            jaFromEN = ""
+            enFromJA = ""
+            enLivePartial = ""
+            partialJA = ""
+            trialStore.consumeOneIfNeeded()
+            // UIテキスト: 簡体字
+            addToLog(original: "（未检测到语音）", translated: "", isUser: true)
+            await startENContinuous()
+            return
+        }
+        isTranslating = true
+        #if canImport(Translation)
+        if let s = sessionJAtoEN {
+            do {
+                let res = try await s.translate(text)
+                enFromJA = res.targetText
+                trialStore.consumeOneIfNeeded()
+                tts.speak(res.targetText, locale: selectedLanguage.partnerTTSLocale)
+                addToLog(original: text, translated: res.targetText, isUser: true)
+            } catch { }
+        }
+        #endif
+        isTranslating = false
+    }
+    #if canImport(Translation)
+    func bindSessionJAtoEN(_ s: TranslationSession) { sessionJAtoEN = s }
+    func bindSessionENtoJA(_ s: TranslationSession) { sessionENtoJA = s }
+    #endif
+}
+
+struct MicButton: View {
+    let isRecording: Bool
+    let action: () -> Void
+    @State private var pulse: CGFloat = 1.0
+    var body: some View {
+        ZStack {
+            if isRecording {
+                // 赤い輪っかを大きく目立つように調整
+                Circle()
+                    .stroke(Color.red.opacity(0.4), lineWidth: 6)
+                    .scaleEffect(pulse)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                            pulse = 2.2 // 輪っかを2.2倍まで拡大
+                        }
+                    }
+                    .onDisappear {
+                        pulse = 1.0
+                    }
+            }
+            Circle()
+                .fill(isRecording ? Color.red : Color.blue)
+                .frame(width: 75, height: 75)
+                .shadow(radius: 5)
+            Image(systemName: "mic.fill")
+                .foregroundColor(.white)
+                .font(.system(size: 30, weight: .bold))
+        }
+        .contentShape(Circle())
+    }
+}
+
+struct HistoryView: View {
+    @ObservedObject var vm: DoujituVM
+    @Environment(\.dismiss) var dismiss
+    @State private var showDeleteConfirm = false
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(spacing: 16) {
+                    if vm.logs.isEmpty {
+                        // UIテキスト: 簡体字
+                        Text("暂无历史记录").foregroundColor(.secondary).padding(.top, 50)
+                    }
+                    ForEach(vm.logs) { log in
+                        HStack(alignment: .bottom) {
+                            if log.isUser {
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 4) {
+                                    Text(log.translated).font(.headline).foregroundColor(.white)
+                                    Text(log.original).font(.subheadline).foregroundColor(.white.opacity(0.8))
+                                }
+                                .padding()
+                                .background(Color.orange)
+                                .cornerRadius(12)
+                            } else {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(log.translated).font(.headline).foregroundColor(.white)
+                                    Text(log.original).font(.subheadline).foregroundColor(.white.opacity(0.8))
+                                }
+                                .padding()
+                                .background(Color.blue)
+                                .cornerRadius(12)
+                                Spacer()
+                            }
+                        }
+                    }
+                }
+                .padding()
+            }
+            // UIテキスト: 簡体字
+            .navigationTitle("对话历史")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(role: .destructive) { showDeleteConfirm = true } label: {
+                        Image(systemName: "trash")
+                        // UIテキスト: 簡体字
+                        Text("清除")
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack {
+                        if !vm.logs.isEmpty {
+                            ShareLink(item: vm.shareText) {
+                                Image(systemName: "square.and.arrow.up")
+                                // UIテキスト: 簡体字
+                                Text("分享")
+                            }
+                        }
+                        // UIテキスト: 簡体字
+                        Button("关闭") { dismiss() }
+                    }
+                }
+            }
+            // UIテキスト: 簡体字
+            .alert("确定要清除所有历史记录吗？", isPresented: $showDeleteConfirm) {
+                Button("取消", role: .cancel) { }
+                Button("清除", role: .destructive) { vm.clearLogs() }
+            }
+        }
+    }
+}
+
+struct ContentView: View {
+    @StateObject var vm: DoujituVM
+    @ObservedObject var trialStore: TrialUsageStore
+    @State private var showHistory = false
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                VStack(spacing: 4) {
+                    HStack {
+                        Text("\(vm.selectedLanguage.flag) \(vm.selectedLanguage.id)").bold()
+                        Spacer()
+                        // UIテキスト: 簡体字
+                        Picker("语言", selection: $vm.selectedLanguage) {
+                            ForEach(availableLanguages) { lang in
+                                Text("\(lang.flag) \(lang.id)").tag(lang)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                    HStack(spacing: 15) {
+                        // UIテキスト: 簡体字
+                        Link("隐私政策", destination: URL(string: "https://trapezoidal-partridge-6ad.notion.site/Doujitu-2b0ab0596b9880d68f09e3757b41f160?pvs=143")!)
+                        Link("使用条款 (EULA)", destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!)
+                        Spacer()
+                    }
+                    .font(.system(size: 12))
+                    .foregroundColor(.orange)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color(.systemGroupedBackground))
+                VStack(spacing: 8) {
+                    HStack {
+                        Image(systemName: "person.wave.2")
+                        // UIテキスト: 簡体字（〜を中国語へ）
+                        Text("\(vm.selectedLanguage.id)译为中文").font(.caption).bold()
+                        Spacer()
+                    }.foregroundColor(.blue)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(vm.enLivePartial).foregroundColor(.secondary).italic()
+                            Text(vm.jaFromEN).font(.system(size: 28, weight: .bold)).frame(maxWidth: .infinity, alignment: .center)
+                        }
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.blue.opacity(0.06))
+                Divider()
+                VStack(spacing: 8) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(vm.partialJA).foregroundColor(.secondary).italic()
+                            Text(vm.enFromJA).font(.system(size: 28, weight: .bold)).frame(maxWidth: .infinity, alignment: .center)
+                        }
+                    }
+                    HStack {
+                        Spacer()
+                        // UIテキスト: 簡体字（中国語を〜へ）
+                        Text("中文译为\(vm.selectedLanguage.id)").font(.caption).bold()
+                        Image(systemName: "bubble.left.and.exclamationmark.bubble.right")
+                    }.foregroundColor(.orange)
+                    
+                    MicButton(isRecording: vm.isRecordingJA, action: {})
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { _ in
+                                    if !vm.isRecordingJA {
+                                        Task { await vm.startRecordingJA() }
+                                    }
+                                }
+                                .onEnded { _ in
+                                    vm.finishAndTranslateJA()
+                                }
+                        )
+                        .padding(.bottom, 40)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.orange.opacity(0.06))
+            }
+            .navigationTitle(appConfig.appDisplayName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: { showHistory = true }) {
+                        Image(systemName: "clock.arrow.circlepath")
+                        // UIテキスト: 簡体字
+                        Text("历史")
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    // UIテキスト: 簡体字
+                    Text("剩余 \(trialStore.remaining)次").font(.caption).padding(5).background(Color.gray.opacity(0.1)).cornerRadius(5)
+                }
+            }
+            .sheet(isPresented: $showHistory) {
+                HistoryView(vm: vm)
+            }
+            #if canImport(Translation)
+            .translationTask(vm.tConfigENtoJA) { session in vm.bindSessionENtoJA(session) }
+            .translationTask(vm.tConfigJAtoEN) { session in vm.bindSessionJAtoEN(session) }
+            #endif
+        }
+    }
+}
+
+struct RootView: View {
+    @EnvironmentObject var subStore: SubscriptionStore
+    @EnvironmentObject var trialStore: TrialUsageStore
+    @StateObject var vm: DoujituVM
+    init(trialStore: TrialUsageStore) {
+        _vm = StateObject(wrappedValue: DoujituVM(trialStore: trialStore))
+    }
+    var body: some View {
+        if subStore.hasCheckedSubscriptionStatus {
+            if subStore.isSubscribed || trialStore.canUseTranslation {
+                ContentView(vm: vm, trialStore: trialStore)
+            } else {
+                SubscriptionView()
+            }
+        } else {
+            // UIテキスト: 簡体字
+            ProgressView("准备中...")
+        }
+    }
+}
+
+struct SubscriptionView: View {
+    @EnvironmentObject var subStore: SubscriptionStore
+    var body: some View {
+        VStack(spacing: 25) {
+            Image(systemName: "globe.americas.fill").font(.system(size: 80)).foregroundColor(.blue)
+            Text("Doujitu for Chinese").font(.largeTitle).bold()
+            // UIテキスト: 簡体字
+            Text("无限使用所有翻译功能。").multilineTextAlignment(.center).padding(.horizontal)
+            Button(action: { Task { await subStore.purchase() } }) {
+                // UIテキスト: 簡体字
+                Text("\(subStore.product?.displayPrice ?? "¥100") 　免费试用 7 天")
+                    .font(.system(size: 24, weight: .black))
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(15)
+            }.padding(.horizontal)
+            // UIテキスト: 簡体字
+            Button("恢复购买") { Task { await subStore.restore() } }.foregroundColor(.secondary)
+            VStack(spacing: 15) {
+                // UIテキスト: 簡体字
+                Link("使用条款 (EULA)", destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!)
+                Link("隐私政策", destination: URL(string: "https://trapezoidal-partridge-6ad.notion.site/Doujitu-2b0ab0596b9880d68f09e3757b41f160?pvs=143")!)
+            }
+            .font(.caption)
+            .padding(.top, 20)
+        }
+    }
+}
+
+@main
+struct DoujituforChineseApp: App {
+    @StateObject private var subStore = SubscriptionStore(config: appConfig)
+    @StateObject private var trialStore = TrialUsageStore()
+    var body: some Scene {
+        WindowGroup {
+            GeometryReader { proxy in
+                let isPad = UIDevice.current.userInterfaceIdiom == .pad
+                let width: CGFloat = isPad ? 430 : proxy.size.width
+                ZStack {
+                    if isPad { Color.black.ignoresSafeArea() }
+                    RootView(trialStore: trialStore)
+                        .environmentObject(subStore)
+                        .environmentObject(trialStore)
+                        .frame(width: width)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color(.systemBackground))
+                }
+            }
+        }
+    }
+}
